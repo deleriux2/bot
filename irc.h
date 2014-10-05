@@ -36,5 +36,6 @@ int irc_join(irc_t *irc, const char *channel);
 int irc_part(irc_t *irc, const char *chnl);
 int irc_get_fd(irc_t *irc);
 void irc_set_flag(irc_t *irc, int flag);
+int irc_send(irc_t *irc, const char *target, char *message);
 
 #endif

@@ -5,6 +5,8 @@
 
 #include "irc.h"
 
+#define COOLDOWN 1
+
 #define IRC_MODE_AWAY        0x00000001
 #define IRC_MODE_INVISIBLE   0x00000002
 #define IRC_MODE_WALLOP      0x00000004
@@ -13,6 +15,8 @@
 #define IRC_MODE_LOPERATOR   0x00000020
 #define IRC_MODE_NOTICE      0x00000040
 #define IRC_MODE_MASKIP      0x00000080
+
+#define IRC_MSGLONGTIME      333333
 
 struct irc_data {
   char prefix[512];
@@ -201,10 +205,12 @@ int irc_join(
   int rc;
   char buf[512];
 
-  rc = snprintf(buf, 512, "JOIN %s\r\n", channel);
-  rc = tls_write(irc->session, buf, rc);
-  if (rc <= 0)
-    return -1;
+  if (irc->logged_in) {
+    rc = snprintf(buf, 512, "JOIN %s\r\n", channel);
+    rc = tls_write(irc->session, buf, rc);
+    if (rc <= 0)
+      return -1;
+  }
 
   return 0;
 }
@@ -214,6 +220,59 @@ int irc_get_fd(
     irc_t *irc)
 {
   return tls_fd(irc->session);
+}
+
+int irc_send(
+    irc_t *irc,
+    const char *target,
+    char *message)
+{
+  int rc;
+  char msgbuf[512];
+  char buf[512];
+  int mlen = strlen(message);
+  int prelen = 8 + strlen(target) + 3; /* "PRIVMSG +<target> ... +\r\n" */
+  int mblen;
+  char *p;
+  char *mb;
+
+  if (!irc->logged_in)
+    return -1;
+
+  /* Since we can never send > 512 bytes, we must chop up the message into 
+     smaller chunks and send them instead. Theres a cooldown between sends.
+  */
+  p = message;
+  /* Add some cooldown between message sends */
+  while (mlen > (512-prelen)) {
+    memset(msgbuf, 0, sizeof(msgbuf));
+    memcpy(msgbuf, p, (512-prelen));
+    mb = msgbuf;
+    mb = rindex(mb, ' ');
+    /* Wraps to the nearest space */
+    if (mb) {
+      mblen = mb - msgbuf;
+      *mb = 0;
+    }
+    else
+      mblen = strlen(msgbuf);
+    p += mblen;
+    mlen -= mblen;
+
+    rc = snprintf(buf, 512, "PRIVMSG %s %s\r\n", target, msgbuf);
+    if (tls_write(irc->session, buf, rc) < 0)
+      return -1;
+    usleep(IRC_MSGLONGTIME);
+  }
+
+  memset(msgbuf, 0, sizeof(msgbuf));
+  memset(buf, 0, sizeof(buf));
+  strncpy(msgbuf, p, 512-prelen);
+  rc = snprintf(buf, 512, "PRIVMSG %s %s\r\n", target, msgbuf);
+  if ((rc = tls_write(irc->session, buf, rc)) < 0)
+    return -1;
+  sleep(COOLDOWN);
+  return rc;
 }
 
 
@@ -369,6 +428,31 @@ static int irc_get_join(
   LIST_INSERT_HEAD(&irc->channels, c, entries);
 }
 
+static int irc_get_part(
+    irc_t *irc,
+    struct irc_data *id)
+{
+  int rc;
+  char channel[512];
+  struct channel *c = NULL;
+
+  memset(channel, 0, sizeof(channel));
+
+  if (sscanf(id->params, "%s", channel) < 0)
+    return 0;
+
+  for (c = irc->channels.lh_first; c != NULL; c = c->entries.le_next) {
+    if (strncmp(channel, c->channelname, 64) == 0) {
+      LIST_REMOVE(c, entries);
+      free(c);
+      printf("Removed channel %s\n", channel);
+      break;
+    }
+  }
+
+  return 0;
+}
+
 
 static int dispatch(
     irc_t *irc,
@@ -385,9 +469,13 @@ static int dispatch(
   else if (strcmp(id->command, "JOIN") == 0)
     rc = irc_get_join(irc, id);
 
+  else if (strcmp(id->command, "PART") == 0)
+    rc = irc_get_part(irc, id);
+
   else {
     printf("%s %s %s\n", id->prefix, id->command, id->params);
   }
 
   return rc;
 }
+

@@ -4,10 +4,12 @@
 #include <string.h>
 #include <errno.h>
 #include <err.h>
+#include <mqueue.h>
 
 #include <sys/epoll.h>
 
 #include "irc.h"
+#include "timed_action.h"
 
 #define CAFILE "/etc/pki/tls/cert.pem"
 #define NICK "hanzel"
@@ -15,8 +17,7 @@
 /* TODO: 
  * A way better configuration matrix
  * Part channels nicely on exit.
- * Handle the situation where you get disconnected.
- * Rate limiting.
+ * Handle the situation where you get disconnected!!!!
  * A configuration database.
  */
 
@@ -25,15 +26,22 @@ struct config {
   char port[64];
   char nickname[64];
   char channel[64];
+  char qname[256];
 } config;
 
-struct irc_msg {
-  char prefix[256];
-  char command[256];
-  char params[2048];
+struct msgq {
+  mqd_t q;
+  irc_t *irc;
+  char channel[64];
 };
 
+/* Super private structures */
+struct join_chan {
+  irc_t *irc;
+  char channel[64];
+};
 
+static int join_channel(void *data);
 
 
 /* Needs some work, totally temporary */
@@ -45,48 +53,59 @@ void parse_config(
   strncpy(config.port, "4446", 4);
   strncpy(config.nickname, "hanzel", 6);
   strncpy(config.channel, "#selinux", 8);
+  strncpy(config.qname, "/gretel", 7);
 }
 
-static int handle_message(
-    gnutls_session_t session,
-    struct irc_msg *msg)
+static int join_channel(
+    void *data)
 {
-  char buf[4096];
-  int len, rc=0;
-
-  if (strncmp(msg->command, "PING", sizeof(msg->command)) == 0) {
-    printf("Sending PONG message\n");
-    rc = snprintf(buf, len, "PONG %s", msg->params);
-  }
-  else if (strncmp(msg->command, "MODE", sizeof(msg->command)) == 0) {
-    printf("Received mode\n");
-    if ((rc = join_channel(session, config.channel)) < 0)
-      rc = -1;
-  }
-
-  /* Ignore all else */
-  else {
-    printf(":%s %s %s", msg->prefix, msg->command, msg->params);
-  }
-
-  if (rc)
-    rc = gnutls_record_send(session, buf, rc);
-  return rc;
+  struct join_chan *chan = (struct join_chan *)data;
+  return irc_join(chan->irc, chan->channel);
 }
 
-int join_channel(
-    gnutls_session_t session,
-    const char *channel)
+static struct msgq * messageq_setup(
+    const char *qname,
+    const char *channel,
+    irc_t *irc)
 {
-  char buf[1024];
+  struct msgq *q = malloc(sizeof(*q));
+  if (!q)
+    err(EXIT_FAILURE, "Cannot allocate for message queue");
+
+  q->q = mq_open(qname, O_RDONLY|O_CREAT, 0660, NULL);
+  if (q->q < 0)
+    err(EXIT_FAILURE, "Cannot open message queue");
+
+  q->irc = irc;
+  strncpy(q->channel, channel, sizeof(q->channel));
+
+  return q;
+}
+
+
+int messageq_dispatch(
+    struct msgq *q)
+{
   int rc;
-  rc = snprintf(buf, 1024, "JOIN %s\r\n", channel);
-  rc = gnutls_record_send(session, buf, rc);
-  if (rc <= 0)
+  int len;
+  char buf[8192];
+
+  memset(buf, 0, sizeof(buf));
+  if (!q->irc->logged_in) {
+    sleep(1);
+    return 0;
+  }
+
+  len = mq_receive(q->q, buf, sizeof(buf), NULL);
+  if (len < 0)
+    return -1;
+  
+  if (irc_send(q->irc, q->channel, buf) < 0)
     return -1;
 
   return 0;
 }
+
 
 
 int main(
@@ -96,35 +115,68 @@ int main(
   int rc, fd, rc2, i;
   char *data;
   int poll;
-  struct epoll_event ev[1];
+  struct msgq *mq;
+  struct timespec when;
+  struct epoll_event ev[3];
+  struct join_chan d;
 
+  timed_action_t *ta;
   irc_t *irc;
 
   parse_config(argc, argv);
 
   tls_setup(CAFILE);
+  /* Setup the IRC connection */
   irc = irc_connect(config.hostname, config.port, config.nickname, IRC_FLAG_ZNC);
-  fd = irc_get_fd(irc);
+
+  /* Setup the timed action */
+  ta = timed_action_init();
+  if (!ta)
+    err(EXIT_FAILURE, "Could not setup timed action");
+
+  /* Attach to the message queue. */
+  mq = messageq_setup(config.qname, config.channel, irc);
+
+  /* Join a room after a period of timeout */
+  when.tv_nsec = 0;
+  when.tv_sec = 4;
+  d.irc = irc;
+  strncpy(d.channel, config.channel, 64);
+
+  if (timed_action_add(ta, &when, join_channel, &d) < 0)
+    err(EXIT_FAILURE, "Cannot initiate timed action add");
 
   /* Setup the polling object */
   ev[0].events = EPOLLIN;
-  ev[0].data.fd = fd;
+  ev[0].data.fd = irc_get_fd(irc);
+  ev[1].events = EPOLLIN;
+  ev[1].data.fd = timed_action_get_fd(ta);
+  ev[2].events = EPOLLIN;
+  ev[2].data.fd = mq->q;
   poll = epoll_create1(EPOLL_CLOEXEC);
   if (poll < 0)
     err(EXIT_FAILURE, "Cannot create polling object");
 
-  if (epoll_ctl(poll, EPOLL_CTL_ADD, fd, &ev[0]) < 0)
+  if (epoll_ctl(poll, EPOLL_CTL_ADD, irc_get_fd(irc), &ev[0]) < 0)
+    err(EXIT_FAILURE, "Cannot add fd to polling object");
+  if (epoll_ctl(poll, EPOLL_CTL_ADD, timed_action_get_fd(ta), &ev[1]) < 0)
+    err(EXIT_FAILURE, "Cannot add fd to polling object");
+  if (epoll_ctl(poll, EPOLL_CTL_ADD, mq->q, &ev[2]) < 0)
     err(EXIT_FAILURE, "Cannot add fd to polling object");
 
   /* Go into polling loop */
   do {
-    rc = epoll_wait(poll, ev, 1, -1);
+    rc = epoll_wait(poll, ev, 2, -1);
     if (rc < 0)
       err(EXIT_FAILURE, "Polling failed");
 
     for (i = 0; i < rc; i++) {
-      if (ev[i].data.fd == fd)
+      if (ev[i].data.fd == irc_get_fd(irc))
         rc = irc_dispatch(irc);
+      else if (ev[i].data.fd == timed_action_get_fd(ta))
+        rc = timed_action_dispatch(ta);
+      else if (ev[i].data.fd == mq->q)
+        rc = messageq_dispatch(mq);
 
       if (rc < 0)
         break;
@@ -132,4 +184,6 @@ int main(
 
   } while (rc >= 0);
 }
+
+
 
