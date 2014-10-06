@@ -244,20 +244,22 @@ int irc_send(
   */
   p = message;
   /* Add some cooldown between message sends */
-  while (mlen > (512-prelen)) {
+  while (mlen > (512-prelen) || strstr(p, "\n") != NULL) {
     memset(msgbuf, 0, sizeof(msgbuf));
     memcpy(msgbuf, p, (512-prelen));
+
     mb = msgbuf;
-    mb = rindex(mb, ' ');
-    /* Wraps to the nearest space */
-    if (mb) {
-      mblen = mb - msgbuf;
+    if ( ((mb = strstr(mb, "\n"))) || ((mb = rindex(mb, ' '))) ) {
+      mblen = (mb+1) - msgbuf;
       *mb = 0;
     }
     else
       mblen = strlen(msgbuf);
     p += mblen;
     mlen -= mblen;
+
+    if (mblen == 1 && msgbuf[0] == '\n')
+      continue;
 
     rc = snprintf(buf, 512, "PRIVMSG %s %s\r\n", target, msgbuf);
     if (tls_write(irc->session, buf, rc) < 0)
@@ -268,6 +270,9 @@ int irc_send(
   memset(msgbuf, 0, sizeof(msgbuf));
   memset(buf, 0, sizeof(buf));
   strncpy(msgbuf, p, 512-prelen);
+  if (strlen(msgbuf) == 1 && msgbuf[0] == "\n")
+    continue;
+
   rc = snprintf(buf, 512, "PRIVMSG %s %s\r\n", target, msgbuf);
   if ((rc = tls_write(irc->session, buf, rc)) < 0)
     return -1;
