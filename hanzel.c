@@ -10,6 +10,7 @@
 
 #include "irc.h"
 #include "timed_action.h"
+#include "audit_msg.h"
 
 #define CAFILE "/etc/pki/tls/cert.pem"
 #define NICK "hanzel"
@@ -99,9 +100,9 @@ int messageq_dispatch(
   len = mq_receive(q->q, buf, sizeof(buf), NULL);
   if (len < 0)
     return -1;
-  
-  if (irc_send(q->irc, q->channel, buf) < 0)
-    return -1;
+
+  /* Pass this to the audit library */
+  audit_msg_dispatch(buf, len);
 
   return 0;
 }
@@ -128,6 +129,9 @@ int main(
   tls_setup(CAFILE);
   /* Setup the IRC connection */
   irc = irc_connect(config.hostname, config.port, config.nickname, IRC_FLAG_ZNC);
+
+  /* Enable the audit parser */
+  audit_msg_init(irc);
 
   /* Setup the timed action */
   ta = timed_action_init();

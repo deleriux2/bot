@@ -270,8 +270,8 @@ int irc_send(
   memset(msgbuf, 0, sizeof(msgbuf));
   memset(buf, 0, sizeof(buf));
   strncpy(msgbuf, p, 512-prelen);
-  if (strlen(msgbuf) == 1 && msgbuf[0] == "\n")
-    continue;
+  if (strlen(msgbuf)== 0 || strlen(msgbuf) == 1 && msgbuf[0] == '\n')
+    return 0;
 
   rc = snprintf(buf, 512, "PRIVMSG %s %s\r\n", target, msgbuf);
   if ((rc = tls_write(irc->session, buf, rc)) < 0)
@@ -335,7 +335,6 @@ static int irc_send_pong(
   int rc;
 
   rc = snprintf(buf, 512, "PONG %s\r\n", id->params);
-  printf("Sending PONG %s\n", id->params);
   return tls_write(irc->session, buf, rc);
 }
 
@@ -429,7 +428,6 @@ static int irc_get_join(
     return -1;
 
   strncpy(c->channelname, channel, sizeof(c->channelname));
-  printf("Added channel %s\n", channel);
   LIST_INSERT_HEAD(&irc->channels, c, entries);
 }
 
@@ -450,7 +448,6 @@ static int irc_get_part(
     if (strncmp(channel, c->channelname, 64) == 0) {
       LIST_REMOVE(c, entries);
       free(c);
-      printf("Removed channel %s\n", channel);
       break;
     }
   }
@@ -478,7 +475,7 @@ static int dispatch(
     rc = irc_get_part(irc, id);
 
   else {
-    printf("%s %s %s\n", id->prefix, id->command, id->params);
+    ; //printf("%s %s %s\n", id->prefix, id->command, id->params);
   }
 
   return rc;
