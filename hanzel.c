@@ -12,8 +12,8 @@
 #include "timed_action.h"
 #include "audit_msg.h"
 
-#define CAFILE "/etc/pki/tls/cert.pem"
-#define NICK "hanzel"
+#define CAFILE "/etc/ca-bundle.pem"
+#define NICK "hanzel1"
 
 /* TODO: 
  * A way better configuration matrix
@@ -51,8 +51,9 @@ void parse_config(
     const char **argv)
 {
   strncpy(config.hostname, "irc.hashbang.sh", strlen("irc.hashbang.sh"));
-  strncpy(config.port, "4446", 4);
-  strncpy(config.nickname, "hanzel", 6);
+//  strncpy(config.port, "4446", 4);
+  strncpy(config.port, "6697", 4);
+  strncpy(config.nickname, "hanzel1", 7);
   strncpy(config.channel, "#selinux", 8);
   strncpy(config.qname, "/gretel", 7);
 }
@@ -93,7 +94,7 @@ int messageq_dispatch(
 
   memset(buf, 0, sizeof(buf));
   if (!q->irc->logged_in) {
-    sleep(1);
+    usleep(100000);
     return 0;
   }
 
@@ -115,6 +116,7 @@ int main(
 {
   int rc, fd, rc2, i;
   char *data;
+  int events;
   int poll;
   struct msgq *mq;
   struct timespec when;
@@ -128,7 +130,8 @@ int main(
 
   tls_setup(CAFILE);
   /* Setup the IRC connection */
-  irc = irc_connect(config.hostname, config.port, config.nickname, IRC_FLAG_ZNC);
+  //irc = irc_connect(config.hostname, config.port, config.nickname, IRC_FLAG_ZNC);
+  irc = irc_connect(config.hostname, config.port, config.nickname, 0);
 
   /* Enable the audit parser */
   audit_msg_init(irc);
@@ -170,13 +173,16 @@ int main(
 
   /* Go into polling loop */
   do {
-    rc = epoll_wait(poll, ev, 2, -1);
-    if (rc < 0)
+    events = epoll_wait(poll, ev, 2, -1);
+    if (events < 0)
       err(EXIT_FAILURE, "Polling failed");
 
-    for (i = 0; i < rc; i++) {
-      if (ev[i].data.fd == irc_get_fd(irc))
+    for (i = 0; i < events; i++) {
+      if (ev[i].data.fd == irc_get_fd(irc)) {
         rc = irc_dispatch(irc);
+        if (rc == 0)
+          goto end;
+      }
       else if (ev[i].data.fd == timed_action_get_fd(ta))
         rc = timed_action_dispatch(ta);
       else if (ev[i].data.fd == mq->q)
@@ -187,6 +193,9 @@ int main(
     }
 
   } while (rc >= 0);
+
+end:
+  exit(1);
 }
 
 

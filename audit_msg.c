@@ -95,16 +95,19 @@ static void audit_handle_event(
                user, euser, exe);
     break;
 
+    case AUDIT_LOGIN:
     case AUDIT_USER_LOGIN:
     case AUDIT_USER_LOGOUT:
       user = aumsg_find_str("auid");
       result = aumsg_find_str("res");
       addr = aumsg_find_str("addr");
       exe = aumsg_find_str("exe");
-      if (strncmp(result, "success", 7) != 0)
+      if ((strncmp(result, "success", 7) != 0) && (strncmp(result, "yes", 3) != 0))
         goto fin;
       if (type == AUDIT_USER_LOGIN)
         snprintf(record_buf, 4096, "User %s has logged from %s in via %s\n", user, addr, exe);
+      else if (type == AUDIT_LOGIN)
+        snprintf(record_buf, 4096, "User %s has logged in\n", user);
       else
         snprintf(record_buf, 4096, "User %s has logged out\n", user);
     break;

@@ -51,13 +51,13 @@ irc_t * irc_connect(
     goto fin;
 
   irc->flags = flags;
+  irc->connected = 1;
 
   if (irc_login(irc, nick, "hanzelpass") < 0)
     goto fin;
 
   LIST_INIT(&irc->channels);
 
-  irc->connected = 1;
   strncpy(irc->hostname, hostname, sizeof(irc->hostname));
   strncpy(irc->port, port, sizeof(irc->port));
   return irc;
@@ -284,7 +284,7 @@ int irc_send(
 int irc_dispatch(
     irc_t *irc)
 {
-  int rc;
+  int rc, rc2;
   char *buf = NULL;
   struct irc_data *id = NULL;
   /* Read a line from the server */
@@ -312,8 +312,8 @@ int irc_dispatch(
     id = NULL;
     free(buf);
     buf = NULL;
-    rc = tls_read_pending();
-    if (!rc)
+    rc2 = tls_read_pending();
+    if (!rc2)
       break;
   }
 
@@ -475,7 +475,7 @@ static int dispatch(
     rc = irc_get_part(irc, id);
 
   else {
-    ; //printf("%s %s %s\n", id->prefix, id->command, id->params);
+    ;//printf("%s %s %s\n", id->prefix, id->command, id->params);
   }
 
   return rc;

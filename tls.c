@@ -22,8 +22,8 @@ void tls_setup(
 {
   int rc;
 
-  if (gnutls_check_version("3.1.4") == NULL)
-    err(EXIT_FAILURE, "GnuTLS 3.1.4 or later is required.\n");
+  //if (gnutls_check_version("3.1.4") == NULL)
+  //  err(EXIT_FAILURE, "GnuTLS 3.1.4 or later is required.\n");
 
   gnutls_global_init();
 
@@ -75,7 +75,7 @@ end:
 int tls_fd(
     gnutls_session_t session)
 {
-  return gnutls_transport_get_int(session);
+  return gnutls_transport_get_ptr(session);
 }
 
 gnutls_session_t tls_connect(
@@ -119,8 +119,7 @@ gnutls_session_t tls_connect(
   if (fd < 0)
     goto end;
 
-  gnutls_transport_set_int(session, fd);
-  gnutls_handshake_set_timeout(session, GNUTLS_DEFAULT_HANDSHAKE_TIMEOUT);
+  gnutls_transport_set_ptr(session, (gnutls_transport_ptr_t)fd);
 
   do {
     rc = gnutls_handshake(session);
@@ -144,7 +143,7 @@ void tls_disconnect(
 {
   int fd;
 
-  gnutls_transport_get_int(session);
+  fd = (gnutls_transport_ptr_t)gnutls_transport_get_ptr(session);
   if (fd < 0)
     return;
 
